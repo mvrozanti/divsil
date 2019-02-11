@@ -2,11 +2,17 @@
 # Resources:
 # https://ai.stackexchange.com/questions/2008/how-can-neural-networks-deal-with-varying-input-sizes
 #
+from autosklearn.regression import AutoSklearnRegressor
 from sklearn.model_selection import train_test_split
+from keras.models import load_model, Sequential
+from keras.callbacks import ModelCheckpoint
 from keras.utils import normalize
+from keras.optimizers import SGD
+from keras.layers import Dense
 import tensorflow as tf
 import os.path as op
 import numpy as np
+import sklearn
 import json
 import code
 import sys
@@ -17,8 +23,8 @@ os.environ['OMP_NUM_THREADS'] = '4'
 os.environ['openmp'] = 'True'
 
 np.set_printoptions(formatter={'float': '{: 0.3f}'.format})
-IN_ORD_MATRIX_PATH = 'in_ord_matrix.npy' # (31,)
-OUT_ORD_MATRIX_PATH = 'out_ord_matrix.npy' # (11,)
+IN_ORD_MATRIX_PATH = 'in_ord_matriz.npy' # (31,)
+OUT_ORD_MATRIX_PATH = 'out_ord_matriz.npy' # (11,)
 MODEL_PATH = 'model.h5'
 config = tf.ConfigProto(device_count={"CPU": 6})
 
@@ -26,99 +32,101 @@ array2pal = lambda array: ''.join([chr(ord) for ord in array])
 pal2array = lambda word: [ord(chr) for chr in word]
 pad_palavra = lambda palavra, max_len_pal: ('{:<%d}' % max_len_pal).format(palavra)
 
+def json2matriz():
+    palavras_path = '/home/nexor/prog/python/portal-da-lingua-portuguesa/palavras-divisao-silabica.json'
+    palavras = json.load(open(palavras_path, 'rb'))
+    max_len_pal = max_qtd_hifen = 0
+
+    for char in palavras:
+        palavras_q_comecam_com_char = palavras[char]
+        for palavra,dividida in palavras_q_comecam_com_char.items():
+            if max_len_pal < len(palavra): max_len_pal = len(palavra)
+            qtd_hifen = dividida.count('-')
+            if max_qtd_hifen < qtd_hifen:
+                max_qtd_hifen = qtd_hifen
+
+    in_ord_matriz = []
+    out_ord_matriz = []
+    for c,palavras_q_comecam_com_char in palavras.items():
+        for palavra,dividida in palavras_q_comecam_com_char.items():
+            palavra_tam_fixo = pad_palavra(palavra, max_len_pal)
+            in_ord_matriz += [pal2array(palavra_tam_fixo)]
+
+            ixs_hifen = [i for i, a in enumerate(dividida) if a == '-']
+            if len(ixs_hifen) < max_qtd_hifen:
+                for i in range(max_qtd_hifen - len(ixs_hifen)):
+                    ixs_hifen += [-1]
+            out_ord_matriz += [ixs_hifen]
+
+
+    in_ord_matriz = np.array(in_ord_matriz)
+    out_ord_matriz = np.array(out_ord_matriz)
+
+    np.save(open(IN_ORD_MATRIX_PATH, 'wb'), in_ord_matriz)
+    np.save(open(OUT_ORD_MATRIX_PATH, 'wb'), out_ord_matriz)
+
+def interagir_com_modelo():
+    X = in_ord_matriz = np.load(open(IN_ORD_MATRIX_PATH, 'rb'))
+    Y = out_ord_matriz = np.load(open(OUT_ORD_MATRIX_PATH, 'rb'))
+
+    X = normalize(X, axis=-1, order=2)
+    Y = normalize(Y, axis=-1, order=2)
+
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y)
+
+    def keras_approach(X, Y):
+        config = tf.ConfigProto(intra_op_parallelism_threads=4,\
+        inter_op_parallelism_threads=4, allow_soft_placement=True,\
+        device_count = {'CPU' : 1, 'GPU': 0})
+        session = tf.Session(config=config)
+        from keras import backend as K
+        K.set_session(session)
+        if op.exists(MODEL_PATH):
+            model = load_model(MODEL_PATH)
+        else:
+            model = Sequential()
+            model.add(Dense(32, input_dim=31))
+            model.add(Dense(20))
+            model.add(Dense(20))
+            model.add(Dense(11))
+            opt = SGD(lr=0.0001)
+            model.compile(loss='mse', optimizer=opt, metrics=['accuracy'])
+
+        checkpointer = ModelCheckpoint(filepath='weights.hdf5', verbose=1, save_best_only=True)
+        model.fit(X,Y, epochs=100, batch_size=25, callbacks=[checkpointer])
+        scores = model.evaluate(X,Y,verbose=0)
+        print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
+        model.save(MODEL_PATH)
+
+    def keras_predict(palavra):
+        if op.exists(MODEL_PATH):
+            model = load_model(MODEL_PATH)
+            X = np.array([pal2array(pad_palavra(palavra, 31))])
+            prediction = model.predict(X)
+            code.interact(local=globals().update(locals()) or globals())
+        else:
+            print('Modelo não encontrado.') or sys.exit(1)
+
+    def autosklearn_approach(X,Y):
+        automl = AutoSklearnRegressor(
+                time_left_for_this_task=120,
+                per_run_time_limit=30,
+                tmp_folder='/tmp/autosklearn_regression_example_tmp',
+                output_folder='/tmp/autosklearn_regression_example_out',
+            )
+        automl.fit(X, Y)
+        print(automl.show_models())
+        predictions = automl.predict(X_test)
+        print("R2 score:", sklearn.metrics.r2_score(Y_test, predictions))
+
+#         keras_predict('palavra')
+    keras_approach(X_train, Y_train)
+
+
 def main():
     if not op.exists(OUT_ORD_MATRIX_PATH) or not op.exists(IN_ORD_MATRIX_PATH):
-        palavras_path = '/home/nexor/prog/python/portal-da-lingua-portuguesa/palavras-divisao-silabica.json'
-        palavras = json.load(open(palavras_path, 'rb'))
-        max_len_pal = max_qtd_hifen = 0
-
-        for char in palavras:
-            palavras_q_comecam_com_char = palavras[char]
-            for palavra,dividida in palavras_q_comecam_com_char.items():
-                if max_len_pal < len(palavra): max_len_pal = len(palavra)
-                qtd_hifen = dividida.count('-')
-                if max_qtd_hifen < qtd_hifen:
-                    max_qtd_hifen = qtd_hifen
-
-        in_ord_matrix = []
-        out_ord_matrix = []
-        for c,palavras_q_comecam_com_char in palavras.items():
-            for palavra,dividida in palavras_q_comecam_com_char.items():
-                palavra_tam_fixo = pad_palavra(palavra, max_len_pal)
-                in_ord_matrix += [pal2array(palavra_tam_fixo)]
-
-                ixs_hifen = [i for i, a in enumerate(dividida) if a == '-']
-                if len(ixs_hifen) < max_qtd_hifen:
-                    for i in range(max_qtd_hifen - len(ixs_hifen)):
-                        ixs_hifen += [-1]
-                out_ord_matrix += [ixs_hifen]
-
-
-        in_ord_matrix = np.array(in_ord_matrix)
-        out_ord_matrix = np.array(out_ord_matrix)
-
-        np.save(open(IN_ORD_MATRIX_PATH, 'wb'), in_ord_matrix)
-        np.save(open(OUT_ORD_MATRIX_PATH, 'wb'), out_ord_matrix)
-
+        json2matriz()
     else:
-        X = in_ord_matrix = np.load(open(IN_ORD_MATRIX_PATH, 'rb'))
-        Y = out_ord_matrix = np.load(open(OUT_ORD_MATRIX_PATH, 'rb'))
-
-        X = normalize(X, axis=-1, order=2)
-        Y = normalize(Y, axis=-1, order=2)
-
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y)
-
-        def keras_approach(X, Y):
-            with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=16)) as sess:
-                from keras.backend import tensorflow_backend as K
-                K.set_session(sess)
-                if op.exists(MODEL_PATH):
-                    from keras.models import load_model
-                    model = load_model(MODEL_PATH)
-                else:
-                    from keras.models import Sequential
-                    from keras.layers import Dense
-                    model = Sequential()
-                    model.add(Dense(32, input_dim=31))
-                    model.add(Dense(20))
-                    model.add(Dense(20))
-                    model.add(Dense(11))
-                    from keras.optimizers import SGD
-                    opt = SGD(lr=0.0001)
-                    model.compile(loss='mse', optimizer=opt, metrics=['accuracy'])
-
-                from keras.callbacks import ModelCheckpoint
-                checkpointer = ModelCheckpoint(filepath='weights.hdf5', verbose=1, save_best_only=True)
-                model.fit(X,Y, epochs=1000, batch_size=25, callbacks=[checkpointer])
-                scores = model.evaluate(X,Y,verbose=0)
-                print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
-                model.save(MODEL_PATH)
-
-        def keras_predict(palavra):
-            if op.exists(MODEL_PATH):
-                from keras.models import load_model
-                model = load_model(MODEL_PATH)
-                X = np.array([pal2array(pad_palavra(palavra, 31))])
-                prediction = model.predict(X)
-                code.interact(local=globals().update(locals()) or globals())
-            else:
-                print('Modelo não encontrado.') or sys.exit(1)
-
-        def autosklearn_approach(X,Y):
-            import sklearn
-            from autosklearn.regression import AutoSklearnRegressor
-            automl = AutoSklearnRegressor(
-                    time_left_for_this_task=120,
-                    per_run_time_limit=30,
-                    tmp_folder='/tmp/autosklearn_regression_example_tmp',
-                    output_folder='/tmp/autosklearn_regression_example_out',
-                )
-            automl.fit(X, Y)
-            print(automl.show_models())
-            predictions = automl.predict(X_test)
-            print("R2 score:", sklearn.metrics.r2_score(Y_test, predictions))
-
-        keras_predict('palavra')
+        interagir_com_modelo()
 
 main()
