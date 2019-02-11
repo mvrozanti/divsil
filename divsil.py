@@ -85,8 +85,7 @@ def interagir_com_matrizes(model_path, palavra=None):
         else:
             model = Sequential()
             model.add(Dense(32, input_dim=31))
-            model.add(Dense(20))
-            model.add(Dense(20))
+            model.add(Dense(50))
             model.add(Dense(11))
             opt = SGD(lr=0.0001)
             model.compile(loss='mse', optimizer=opt, metrics=['accuracy'])
