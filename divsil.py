@@ -7,7 +7,7 @@ from keras.models import load_model, Sequential
 from keras.callbacks import ModelCheckpoint
 from keras.utils import normalize
 from keras.optimizers import SGD
-from keras.layers import Dense
+from keras.layers import Dense, Dropout
 import tensorflow as tf
 import os.path as op
 import numpy as np
@@ -16,11 +16,11 @@ import json
 import code
 import sys
 import os
+
 os.environ['MKL_NUM_THREADS'] = '4'
 os.environ['GOTO_NUM_THREADS'] = '4'
 os.environ['OMP_NUM_THREADS'] = '4'
 os.environ['openmp'] = 'True'
-
 
 np.set_printoptions(formatter={'float': '{: 0.3f}'.format})
 IN_ORD_MATRIX_PATH = 'in_ord_matriz.npy' # (31,)
@@ -64,7 +64,7 @@ def json2matriz():
     np.save(open(IN_ORD_MATRIX_PATH, 'wb'), in_ord_matriz)
     np.save(open(OUT_ORD_MATRIX_PATH, 'wb'), out_ord_matriz)
 
-def interagir_com_matrizes(model_path, palavra=None):
+def interagir_com_matrizes(model_path, epochs, batch_size, palavra=None):
     X = in_ord_matriz = np.load(open(IN_ORD_MATRIX_PATH, 'rb'))
     Y = out_ord_matriz = np.load(open(OUT_ORD_MATRIX_PATH, 'rb'))
 
@@ -73,7 +73,7 @@ def interagir_com_matrizes(model_path, palavra=None):
 
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y)
 
-    def keras_approach(X, Y):
+    def treinar(X, Y):
         config = tf.ConfigProto(intra_op_parallelism_threads=4,\
         inter_op_parallelism_threads=4, allow_soft_placement=True,\
         device_count = {'CPU' : 1, 'GPU': 0})
@@ -85,18 +85,20 @@ def interagir_com_matrizes(model_path, palavra=None):
         else:
             model = Sequential()
             model.add(Dense(32, input_dim=31))
-            model.add(Dense(50))
+            model.add(Dense(100))
+            model.add(Dense(100))
+            model.add(Dropout(0.5))
             model.add(Dense(11))
             opt = SGD(lr=0.0001)
             model.compile(loss='mse', optimizer=opt, metrics=['accuracy'])
 
         checkpointer = ModelCheckpoint(filepath='weights.hdf5', verbose=1, save_best_only=True)
-        model.fit(X,Y, epochs=100, batch_size=25, callbacks=[checkpointer])
-        scores = model.evaluate(X,Y,verbose=0)
+        model.fit(X,Y, epochs=epochs, batch_size=25, callbacks=[checkpointer])
+        scores = model.evaluate(X_test,Y_test,verbose=0)
         print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
         model.save(model_path)
 
-    def keras_predict(palavra):
+    def prever_palavra(palavra):
         if op.exists(model_path):
             model = load_model(model_path)
             X = np.array([pal2array(pad_palavra(palavra, 31))])
@@ -106,22 +108,23 @@ def interagir_com_matrizes(model_path, palavra=None):
             print('Modelo não encontrado.') or sys.exit(1)
 
     if palavra:
-        keras_predict(palavra)
+        prever_palavra(palavra)
     else:
-        keras_approach(X_train, Y_train)
+        treinar(X_train, Y_train)
 
 
 def main():
     parser = argparse.ArgumentParser(prog='divsil', description='divisor de sílabas genérico')
     actions = parser.add_mutually_exclusive_group(required=False)
-    actions.add_argument('-t', '--treinar', metavar='<NOME_DO_MODELO>.h5', default='model.h5', help='treinar modelo (default=./modelo.h5')
+    actions.add_argument('-t', '--treinar', metavar='<NOME_DO_MODELO>.h5', default='modelo.h5',help='treinar modelo (default=./modelo.h5')
     actions.add_argument('-p', '--palavra', metavar='palavra',                                 help='teste manual de uma única palavra')
-    parser.add_argument( '-e', '--epochs',  metavar='N', default=50,                           help='treinar por N epochs (default=50)')
+    parser.add_argument( '-e', '--epochs',  metavar='N', default=50,                           help='treinar por N epochs (default=50)', type=int)
+    parser.add_argument( '-b', '--batch-size',  metavar='N', default=50,                       help='treinar com N amostras por epoch (default=50)', type=int)
     args = parser.parse_args()
 
     if not op.exists(OUT_ORD_MATRIX_PATH) or not op.exists(IN_ORD_MATRIX_PATH):
         json2matriz()
     else:
-        interagir_com_matrizes(args.treinar, args.palavra)
+        interagir_com_matrizes(args.treinar, args.epochs, args.batch_size, args.palavra)
 
 main()
